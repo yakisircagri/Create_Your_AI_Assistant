@@ -1,20 +1,20 @@
-.env
-.env.*
-!.env.example
-
+# Root virtual environment
 .venv/
-venv/
 
+# IDE
+.idea/
+
+# Backend secrets / venv
+backend/.env
+backend/.venv/
+
+# Python cache
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 
-.idea/
-.vscode/
-
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-*.log
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env
+frontend/.env.*

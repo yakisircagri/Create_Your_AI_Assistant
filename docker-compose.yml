@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: agent_builder_postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: agent_builder
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
