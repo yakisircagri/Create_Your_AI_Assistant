@@ -5,11 +5,13 @@ from pydantic import BaseModel, Field
 class AgentCreate(BaseModel):
     name: str
     description: str | None = None
+    name: str
     system_prompt: str | None = None
     model: str = "gpt-5.2"
 
 class AgentResponse(BaseModel):
     id: int
+    user_id: int
     name: str
     description: str | None = None
     system_prompt: str | None = None

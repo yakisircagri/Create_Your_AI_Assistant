@@ -1,16 +1,23 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, String, Text, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 
+
 class Agent(Base):
-    __tablename__ = 'agents'
+    __tablename__ = "agents"
 
     id: Mapped[int] = mapped_column(
         primary_key=True,
         autoincrement=True,
+    )
+
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
     name: Mapped[str] = mapped_column(
@@ -18,37 +25,42 @@ class Agent(Base):
         nullable=False,
     )
 
-    description: Mapped[str] = mapped_column(
+    description: Mapped[str | None] = mapped_column(
         Text,
-        nullable= True,
+        nullable=True,
     )
 
     system_prompt: Mapped[str | None] = mapped_column(
         Text,
-        nullable= True,
+        nullable=True,
     )
 
     model: Mapped[str] = mapped_column(
         String(100),
-        nullable= False,
-        default="gpt-5.2"
+        nullable=False,
+        default="gpt-5.2",
     )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default= datetime.utcnow(),
+        default=datetime.utcnow,
     )
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default= datetime.utcnow(),
-        onupdate=datetime.utcnow(),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    user = relationship(
+        "User",
+        back_populates="agents",
     )
 
     tools = relationship(
         "AgentTool",
         back_populates="agent",
-        cascade= "all, delete-orphan"
+        cascade="all, delete-orphan",
     )
 
     conversations = relationship(

@@ -103,6 +103,55 @@ class LLMService:
 
 
 
+    async def generate_conversation_title(
+            self,
+            messages: list[dict],
+    ) -> str:
+        title_messages = [
+        {
+            "role": "system",
+            "content": (
+                "Generate a very short title for this conversation. "
+                "Summarize only the main topic. "
+                "Use a MAXIMUM of 4 words. "
+                "Keep the title under 35 characters. "
+                "Use the same language as the conversation. "
+                "Return only the title. "
+                "Do not use quotation marks. "
+                "Do not add punctuation at the end. "
+                "Do not include unnecessary details."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Conversation:\n"
+                + "\n".join(
+                    f"{message.get('role')}: "
+                    f"{message.get('content') or ''}"
+                    for message in messages
+                    if message.get("role") in {
+                        "user",
+                        "assistant",
+                    }
+                )
+            ),
+        },
+    ]
+        response = await self.client.chat.completions.create(
+            model="gpt-5.2",
+            messages=title_messages,
+        )
+
+        title = response.choices[0].message.content or ""
+
+        if not title:
+            return "New Conversation"
+
+        return title.strip()
+
+
+
     @staticmethod
     def mcp_tools_to_openai_tools(mcp_tools):
         tools = []

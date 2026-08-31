@@ -1,5 +1,8 @@
 "use client";
 
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
 import {useEffect, useRef, useState} from "react";
 import {
   Agent,
@@ -16,6 +19,16 @@ import {
   getConversations,
   getMessages,
   sendMessage,
+  MCPServer,
+  MCPTool,
+  discoverMcpServer,
+  connectMcpServer,
+  getMcpServers,
+  updateAgentTools,
+  loginUser,
+  registerUser,
+  getCurrentUser,
+  CurrentUser,
 } from "../lib/api";
 
 export default function Home() {
@@ -45,12 +58,77 @@ export default function Home() {
   const [agentModel, setAgentModel] = useState("gpt-5.2");
 
   const [creatingAgent, setCreatingAgent] = useState(false);
+  type MCPModalView = "search" | "tools";
 
+  const [isMcpModalOpen, setIsMcpModalOpen] =
+    useState(false);
+
+  const [mcpModalView, setMcpModalView] =
+    useState<MCPModalView>("search");
+
+  const [mcpServers, setMcpServers] =
+    useState<MCPServer[]>([]);
+
+  const [mcpSearch, setMcpSearch] =
+    useState("");
+
+  const [
+    selectedMcpServer,
+    setSelectedMcpServer,
+  ] = useState<MCPServer | null>(null);
+
+  const [mcpTools, setMcpTools] =
+    useState<MCPTool[]>([]);
+
+  const [
+    selectedMcpToolIds,
+    setSelectedMcpToolIds,
+  ] = useState<number[]>([]);
+
+  const [
+    existingAgentToolIds,
+    setExistingAgentToolIds,
+  ] = useState<number[]>([]);
+
+  const [isLoadingMcpTools, setIsLoadingMcpTools] =
+    useState(false);
+
+  const [isAddingTools, setIsAddingTools] =
+    useState(false);
+
+  const [mcpSuccessMessage, setMcpSuccessMessage] =
+  useState<string | null>(null);
+
+  const [authMode, setAuthMode] =
+  useState<"login" | "register">("login");
+
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [authToken, setAuthToken] =
+    useState<string | null>(null);
+
+  const [currentUser, setCurrentUser] =
+    useState<CurrentUser | null>(null);
+
+  const [authError, setAuthError] =
+    useState<string | null>(null);
+
+  const [isAuthenticating, setIsAuthenticating] =
+    useState(false);
+
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
     async function loadAgents() {
       try {
-        const data = await getAgents();
+        if (!authToken) {
+          return;
+        }
+
+        const data = await getAgents(authToken);
 
         setAgents(data);
 
@@ -65,7 +143,7 @@ export default function Home() {
     }
 
     loadAgents();
-  }, []);
+  }, [authToken]);
 
 
   useEffect(() => {
@@ -76,7 +154,14 @@ export default function Home() {
 
     async function loadAgentTools() {
       try {
-        const data = await getAgentTools(selectedAgent.id);
+        if (!authToken) {
+          return;
+        }
+
+        const data = await getAgentTools(
+          selectedAgent.id,
+          authToken,
+        );
         setAgentTools(data);
       } catch (error) {
         console.error(error);
@@ -85,11 +170,11 @@ export default function Home() {
     }
 
     loadAgentTools();
-  }, [selectedAgent]);
+  }, [selectedAgent,authToken]);
 
 
   async function handleDeleteTool(toolId:number){
-    if (!selectedAgent) {
+    if (!selectedAgent || !authToken) {
     return;
     }
 
@@ -113,6 +198,7 @@ export default function Home() {
       await deleteAgentTool(
           selectedAgent.id,
           toolId,
+          authToken,
       );
 
       setAgentTools((current) =>
@@ -139,7 +225,14 @@ export default function Home() {
 
   async function loadConversations() {
     try {
-      const data = await getConversations(selectedAgent.id);
+      if (!authToken) {
+        return;
+      }
+
+      const data = await getConversations(
+        selectedAgent.id,
+        authToken,
+      );
 
       setConversations(data);
 
@@ -148,7 +241,9 @@ export default function Home() {
       } else {
         const conversation = await createConversation(
           selectedAgent.id,
+
           "New Conversation",
+          authToken,
         );
 
         setConversations([conversation]);
@@ -164,7 +259,7 @@ export default function Home() {
   }
 
   loadConversations();
-}, [selectedAgent]);
+}, [selectedAgent,authToken]);
 
 
   useEffect(() => {
@@ -175,7 +270,14 @@ export default function Home() {
 
     async function loadMessages() {
       try {
-        const data = await getMessages(selectedConversation.id);
+        if (!authToken) {
+        return;
+      }
+
+      const data = await getMessages(
+        selectedConversation.id,
+        authToken,
+      );
         setMessages(data);
       } catch (error) {
         console.error(error);
@@ -184,7 +286,7 @@ export default function Home() {
     }
 
     loadMessages();
-  }, [selectedConversation]);
+  }, [selectedConversation,authToken]);
 
 
 useEffect(() => {
@@ -219,12 +321,23 @@ useEffect(() => {
   return () => {
     window.removeEventListener("keydown", handleGlobalKeyDown);
   };
-}, [selectedConversation]);
+}, [selectedConversation,sending]);
 
+
+useEffect(() => {
+  if (messages.length === 0) {
+    return;
+  }
+
+  messagesEndRef.current?.scrollIntoView({
+    behavior: "instant",
+    block: "end",
+  });
+}, [messages]);
 
 
   async function handleNewConversation() {
-  if (!selectedAgent) {
+  if (!selectedAgent || !authToken) {
     alert("You must choose at least one agent!");
     return;
   }
@@ -233,6 +346,7 @@ useEffect(() => {
     const conversation = await createConversation(
       selectedAgent.id,
       "New Conversation",
+      authToken,
     );
 
     setConversations((current) => [
@@ -263,7 +377,14 @@ useEffect(() => {
   }
 
   try {
-    await deleteConversation(conversationId);
+      if (!authToken) {
+      return;
+    }
+
+    await deleteConversation(
+      conversationId,
+      authToken,
+    );
 
     setConversations((current) =>
       current.filter(
@@ -286,7 +407,7 @@ useEffect(() => {
 
 
   async function handleSendMessage() {
-    if (!selectedConversation || !message.trim() || sending) {
+    if (!selectedConversation || !message.trim() || sending ||!authToken) {
       return;
     }
 
@@ -311,7 +432,21 @@ useEffect(() => {
       const response = await sendMessage(
           selectedConversation.id,
           content,
+          authToken,
       );
+
+      if (response.conversation_title) {
+        setConversations((current) =>
+          current.map((conversation) =>
+            conversation.id === selectedConversation.id
+              ? {
+                  ...conversation,
+                  title: response.conversation_title,
+                }
+              : conversation,
+          ),
+        );
+      }
 
       const assistantMessage: Message = {
         id: Date.now() + 1,
@@ -334,7 +469,6 @@ useEffect(() => {
     }
   }
 
-
   async function handleDeleteAgent(agentId: number) {
     const agent = agents.find(
         (item) => item.id == agentId
@@ -353,7 +487,14 @@ useEffect(() => {
     }
 
     try {
-      await deleteAgent(agentId);
+      if (!authToken) {
+      return;
+    }
+
+    await deleteAgent(
+      agentId,
+      authToken,
+    );
 
       setAgents((current) =>
           current.filter((item) => item.id !== agentId),
@@ -380,9 +521,16 @@ useEffect(() => {
   setCreatingAgent(true);
 
   try {
+    if (!authToken) {
+      return;
+    }
+
     const agent = await createAgent(
       agentName.trim(),
       agentDescription.trim(),
+      agentSystemPrompt.trim(),
+      agentModel,
+      authToken,
     );
 
     setAgents((current) => [
@@ -403,6 +551,355 @@ useEffect(() => {
   }
 }
 
+  async function handleOpenMcpSearch(){
+      try{
+        const servers = await getMcpServers();
+
+        setMcpServers(servers);
+        setMcpModalView("search");
+        setSelectedMcpServer(null);
+        setMcpTools([]);
+        setSelectedMcpToolIds([]);
+        setIsMcpModalOpen(true);
+      }catch (error) {
+      console.error(error);
+    }}
+
+  async function handleViewMcpTools(
+      server : MCPServer,
+  ){
+    try{
+      setIsLoadingMcpTools(true);
+      setSelectedMcpServer(server);
+
+      if (!authToken) {
+        return;
+      }
+
+      const result = await discoverMcpServer(
+        server.id,
+        authToken,
+      );
+
+      if (
+        result.auth_required &&
+        !result.connected
+      ) {
+        const connectionResult =
+          await connectMcpServer(
+            server.id,
+            authToken,
+          );
+
+        if (connectionResult.authorization_url) {
+          window.location.href =
+            connectionResult.authorization_url;
+
+          return;
+        }
+      }
+
+      setMcpTools(result.tools);
+
+      if(selectedAgent){
+        const agentTools = await getAgentTools(
+            selectedAgent.id,
+            authToken,
+        );
+
+        const agentToolIds = agentTools.map(
+            (tool) => tool.id,
+        );
+
+        setExistingAgentToolIds(
+            agentToolIds,
+        );
+
+        const selectedIds = result.tools
+          .filter((tool) =>
+          agentToolIds.includes(tool.id),
+          ).map((tool) => tool.id)
+
+        setSelectedMcpToolIds(
+            selectedIds,
+        );
+      }else{
+        setSelectedMcpToolIds([])
+      }
+
+      setMcpModalView("tools")
+
+    }catch (error) {
+    console.error(error);
+  } finally {
+    setIsLoadingMcpTools(false);
+  }
+  }
+
+  function handleToggleMcpTool(
+    toolId: number,
+  ) {
+    setSelectedMcpToolIds((current) =>
+      current.includes(toolId)
+        ? current.filter(
+            (id) => id !== toolId,
+          )
+        : [...current, toolId],
+    );
+  }
+
+  async function handleApplyMcpTools(){
+    if(!selectedAgent || !selectedMcpServer || !authToken){
+      return;
+    }
+
+    try {
+      setIsAddingTools(true);
+
+      const currentAgentTools =
+          await getAgentTools(selectedAgent.id,authToken);
+
+      const currentServerToolIds =
+          mcpTools.map((tool) => tool.id);
+
+      const otherServerToolIds =
+          currentAgentTools.filter(
+              (tool) =>
+                  !currentServerToolIds.includes(tool.id),
+          ).map((tool) => tool.id)
+
+      const finalToolIds = [
+      ...otherServerToolIds,
+      ...selectedMcpToolIds,
+    ];
+
+      await updateAgentTools(
+          selectedAgent.id,
+          finalToolIds,
+          authToken,
+      );
+
+      const updatedTools =
+          await getAgentTools(selectedAgent.id,authToken)
+
+      setAgentTools(updatedTools);
+
+      setExistingAgentToolIds(
+          updatedTools.map((tool) => tool.id),
+      )
+
+      setMcpSuccessMessage("Tool selection updated successfully.");
+
+      setTimeout(() => {
+        setMcpSuccessMessage(null);
+      },2000);
+
+    }catch(error){
+      console.error(error);
+    }
+    finally{
+      setIsAddingTools(false);
+    }
+  }
+
+  function handleBackToMcpSearch(){
+    setMcpModalView("search");
+    setSelectedMcpServer(null);
+    setMcpTools([]);
+    setSelectedMcpToolIds([]);
+  }
+
+  const filteredMcpServers =
+      mcpServers.filter((server) => {
+        const query =
+            mcpSearch.toLowerCase();
+
+        return (
+        server.name
+          .toLowerCase()
+          .includes(query) ||
+        server.description
+          ?.toLowerCase()
+          .includes(query)
+        );
+      });
+
+
+useEffect(() => {
+  async function checkAuth() {
+    const token =
+      localStorage.getItem("access_token");
+
+    if (!token) {
+      setAuthLoading(false);
+      return;
+    }
+
+    try {
+      const user =
+        await getCurrentUser(token);
+
+      setAuthToken(token);
+      setCurrentUser(user);
+    } catch {
+      localStorage.removeItem("access_token");
+      setAuthToken(null);
+      setCurrentUser(null);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  checkAuth();
+}, []);
+
+
+  async function handleAuthSubmit() {
+    try {
+      setIsAuthenticating(true);
+      setAuthError(null);
+
+      const result =
+          authMode === "login"
+          ? await loginUser(email, password)
+          : await registerUser(email, password);
+
+      localStorage.setItem(
+      "access_token",
+      result.access_token,
+    );
+
+      setAuthToken(result.access_token);
+
+      const user = await getCurrentUser(
+          result.access_token
+      );
+
+      setCurrentUser(user);
+
+      setEmail("");
+      setPassword("");
+
+    }catch(error){
+      console.error(error);
+
+      setAuthError(
+        authMode === "login"
+          ? "Invalid email or password."
+          : "Account could not be created.",
+      );
+    }
+    finally{
+      setIsAuthenticating(false)
+    }
+  }
+
+  function handleLogout() {
+  localStorage.removeItem("access_token");
+
+  setAuthToken(null);
+  setCurrentUser(null);
+
+  setAgents([]);
+  setSelectedAgent(null);
+  setConversations([]);
+  setSelectedConversation(null);
+  setMessages([]);
+  setAgentTools([]);
+}
+
+  if (authLoading) {
+    return (
+      <main className="flex h-screen items-center justify-center bg-white">
+        <p className="text-sm text-gray-400">
+          Loading...
+        </p>
+      </main>
+    );
+  }
+  
+  if (!currentUser) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-white">
+        <div className="w-full max-w-sm px-6">
+
+          <h1 className="mb-2 text-2xl font-semibold">
+            Build Your AI Agent
+          </h1>
+
+          <p className="mb-6 text-sm text-gray-500">
+            {authMode === "login"
+              ? "Sign in to continue."
+              : "Create your account."}
+          </p>
+
+          {authError && (
+            <div className="mb-4 rounded-lg bg-gray-100 px-3 py-2 text-sm">
+              {authError}
+            </div>
+          )}
+
+          <div className="space-y-3">
+
+            <input
+              type="email"
+              value={email}
+              onChange={(event) =>
+                setEmail(event.target.value)
+              }
+              placeholder="Email"
+              className="w-full rounded-lg border px-3 py-2.5"
+            />
+
+            <input
+              type="password"
+              value={password}
+              onChange={(event) =>
+                setPassword(event.target.value)
+              }
+              placeholder="Password"
+              className="w-full rounded-lg border px-3 py-2.5"
+            />
+
+            <button
+              onClick={handleAuthSubmit}
+              disabled={
+                !email ||
+                !password ||
+                isAuthenticating
+              }
+              className="w-full rounded-lg bg-black px-3 py-2.5 text-sm text-white disabled:opacity-40"
+            >
+              {isAuthenticating
+                ? "Please wait..."
+                : authMode === "login"
+                  ? "Sign In"
+                  : "Create Account"}
+            </button>
+
+          </div>
+
+          <button
+            onClick={() => {
+              setAuthMode(
+                authMode === "login"
+                  ? "register"
+                  : "login",
+              );
+
+              setAuthError(null);
+            }}
+            className="mt-4 text-sm text-gray-600 hover:text-black"
+          >
+            {authMode === "login"
+              ? "Don't have an account? Sign Up"
+              : "Already have an account? Sign In"}
+          </button>
+
+        </div>
+      </main>
+    );
+  }
 
   if (loading) {
     return (
@@ -418,200 +915,194 @@ useEffect(() => {
   return (
       <main className="flex h-screen bg-white text-gray-900">
         {/* SIDEBAR */}
-        <aside className="flex w-72 flex-col border-r border-gray-200 bg-gray-50">
-
-          {/* Logo */}
-          <div className="px-5 py-5">
+        <aside className="flex h-screen w-72 flex-col border-r border-gray-200 bg-gray-50">
+          <div className="shrink-0 px-5 py-5">
             <h1 className="text-xl font-semibold">
-              Create Your Own AI Assistant
+              Build Your Intelligent Assistant
             </h1>
           </div>
 
-          <div className="px-3">
+          <div className="sidebar-scroll min-h-0 flex-1 overflow-y-scroll">
 
-            {/* MCP Servers */}
-            <button
-                className="mb-1 w-full rounded-lg px-3 py-2.5 text-left text-sm hover:bg-gray-200"
-            >
-              MCP Servers
-            </button>
+            <div className="px-3">
 
-            {/* Tools */}
-            <button
+              {/* MCP Search */}
+              <button
+                onClick={handleOpenMcpSearch}
+                className="mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm hover:bg-gray-200 disabled:cursor-not-allowed disabled:text-gray-400"
+              >
+                MCP Server
+              </button>
+
+              {/* Tools */}
+              <button
                 onClick={() =>
-                    setToolsOpen((current) => !current)
+                  setToolsOpen((current) => !current)
                 }
                 disabled={!selectedAgent}
                 className="mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm hover:bg-gray-200 disabled:cursor-not-allowed disabled:text-gray-400"
-            >
-              <span>Tools</span>
+              >
+                <span>Tools</span>
 
-              <span className="text-xs">
-            {toolsOpen ? "⌃" : "⌄"}
-          </span>
-            </button>
+                <span className="text-xs">
+                  {toolsOpen ? "⌃" : "⌄"}
+                </span>
+              </button>
 
-            {/* Tools List */}
-            {toolsOpen && (
+              {/* Tools List */}
+              {toolsOpen && (
                 <div className="mb-3 space-y-1 px-2">
                   {agentTools.length === 0 ? (
-                      <p className="px-2 py-2 text-xs text-gray-400">
-                        No tools added to this agent.
-                      </p>
+                    <p className="px-2 py-2 text-xs text-gray-400">
+                      No tools added to this agent.
+                    </p>
                   ) : (
-                      agentTools.map((tool) => (
-                        <div
-                          key={tool.id}
-                          className="flex items-center rounded-lg px-2 py-2 hover:bg-gray-100"
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium text-gray-700">
-                              {tool.name}
-                            </p>
+                    agentTools.map((tool) => (
+                      <div
+                        key={tool.id}
+                        className="flex items-center rounded-lg px-2 py-2 hover:bg-gray-100"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-gray-700">
+                            {tool.name}
+                          </p>
 
-                            {tool.description && (
-                              <p className="mt-0.5 line-clamp-2 text-xs text-gray-400">
-                                {tool.description}
-                              </p>
-                            )}
-                          </div>
-                          
-                          <button
-                            onClick={() =>
-                              handleDeleteTool(tool.id)
-                            }
-                            className="ml-2 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-gray-200 hover:text-red-600"
-                            title="Remove tool"
-                          >
-                            −
-                          </button>
+                          {tool.description && (
+                            <p className="mt-0.5 line-clamp-2 text-xs text-gray-400">
+                              {tool.description}
+                            </p>
+                          )}
                         </div>
-                      ))
+
+                        <button
+                          onClick={() =>
+                            handleDeleteTool(tool.id)
+                          }
+                          className="ml-2 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-gray-200 hover:text-red-600"
+                          title="Remove tool"
+                        >
+                          −
+                        </button>
+                      </div>
+                    ))
                   )}
                 </div>
-            )}
+              )}
 
-            {/* My Agents */}
-            <button
+              {/* My Agents */}
+              <button
                 onClick={() =>
-                    setAgentsOpen((current) => !current)
+                  setAgentsOpen((current) => !current)
                 }
                 className="mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-medium hover:bg-gray-200"
-            >
-              <span>My Agents</span>
+              >
+                <span>My Agents</span>
 
-              <span className="text-xs">
-            {agentsOpen ? "⌃" : "⌄"}
-          </span>
-            </button>
+                <span className="text-xs">
+                  {agentsOpen ? "⌃" : "⌄"}
+                </span>
+              </button>
 
-            {/* Agents List */}
-            {agentsOpen && (
+              {/* Agents List */}
+              {agentsOpen && (
                 <div className="mb-2 space-y-1 px-2">
                   {agents.length === 0 ? (
-                      <p className="px-2 py-2 text-xs text-gray-400">
-                        No agents available.
-                      </p>
+                    <p className="px-2 py-2 text-xs text-gray-400">
+                      No agents available.
+                    </p>
                   ) : (
-                      agents.map((agent) => (
-                          <div
-                              key={agent.id}
-                              className={`flex items-center rounded-lg ${
-                                  selectedAgent?.id === agent.id
-                                      ? "bg-gray-200"
-                                      : "hover:bg-gray-200"
-                              }`}
-                          >
-                            {/* Agent Select */}
-                            <button
-                                onClick={() =>
-                                    setSelectedAgent(agent)
-                                }
-                                className="min-w-0 flex-1 truncate px-3 py-2.5 text-left text-sm"
-                            >
-                              {agent.name}
-                            </button>
+                    agents.map((agent) => (
+                      <div
+                        key={agent.id}
+                        className={`flex items-center rounded-lg ${
+                          selectedAgent?.id === agent.id
+                            ? "bg-gray-200"
+                            : "hover:bg-gray-200"
+                        }`}
+                      >
+                        <button
+                          onClick={() =>
+                            setSelectedAgent(agent)
+                          }
+                          className="min-w-0 flex-1 truncate px-3 py-2.5 text-left text-sm"
+                        >
+                          {agent.name}
+                        </button>
 
-                            {/* Delete Agent */}
-                            <button
-                                onClick={() =>
-                                    handleDeleteAgent(agent.id)
-                                }
-                                className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-gray-300 hover:text-red-600"
-                                title="Delete agent"
-                            >
-                              🗑
-                            </button>
-                          </div>
-                      ))
+                        <button
+                          onClick={() =>
+                            handleDeleteAgent(agent.id)
+                          }
+                          className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-gray-300 hover:text-red-600"
+                          title="Delete agent"
+                        >
+                          🗑
+                        </button>
+                      </div>
+                    ))
                   )}
                 </div>
-            )}
+              )}
 
-            {/* Add New Agent */}
-            <button
+              {/* Add New Agent */}
+              <button
                 onClick={() => setAgentModalOpen(true)}
                 className="mb-3 w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium hover:bg-gray-200"
-            >
-              + Add New Agent
-            </button>
+              >
+                + Add New Agent
+              </button>
 
-            {/* New Conversation */}
-            <button
+              {/* New Conversation */}
+              <button
                 onClick={handleNewConversation}
                 disabled={!selectedAgent}
                 className="mb-4 w-full rounded-lg bg-gray-900 px-3 py-2.5 text-left text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-300"
-            >
-              + New Conversation
-            </button>
+              >
+                + New Conversation
+              </button>
 
-          </div>
-
-          {/* Recent Chats */}
-          <div className="flex-1 overflow-y-auto px-3">
-
-            <p className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-              Recent Chats
-            </p>
-
-            {conversations.length === 0 ? (
-              <p className="px-3 py-2 text-sm text-gray-400">
-                No conversations yet.
+              {/* Recent Chats */}
+              <p className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Recent Chats
               </p>
-            ) : (
-              conversations.map((conversation) => (
-                <div
-                  key={conversation.id}
-                  className={`mb-1 flex items-center rounded-lg ${
-                    selectedConversation?.id === conversation.id
-                      ? "bg-gray-200"
-                      : "hover:bg-gray-200"
-                  }`}
-                >
-                  {/* Conversation */}
-                  <button
-                    onClick={() =>
-                      setSelectedConversation(conversation)
-                    }
-                    className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm"
-                  >
-                    {conversation.title || "New Conversation"}
-                  </button>
 
-                  {/* Delete Conversation */}
-                  <button
-                    onClick={() =>
-                      handleDeleteConversation(conversation.id)
-                    }
-                    className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-gray-300 hover:text-red-600"
-                    title="Delete conversation"
+              {conversations.length === 0 ? (
+                <p className="px-3 py-2 text-sm text-gray-400">
+                  No conversations yet.
+                </p>
+              ) : (
+                conversations.map((conversation) => (
+                  <div
+                    key={conversation.id}
+                    className={`mb-1 flex items-center rounded-lg ${
+                      selectedConversation?.id === conversation.id
+                        ? "bg-gray-200"
+                        : "hover:bg-gray-200"
+                    }`}
                   >
-                    🗑
-                  </button>
-                </div>
-              ))
-            )}
+                    <button
+                      onClick={() =>
+                        setSelectedConversation(conversation)
+                      }
+                      className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm"
+                    >
+                      {conversation.title || "New Conversation"}
+                    </button>
 
+                    <button
+                      onClick={() =>
+                        handleDeleteConversation(conversation.id)
+                      }
+                      className="mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-gray-400 hover:bg-gray-300 hover:text-red-600"
+                      title="Delete conversation"
+                    >
+                      🗑
+                    </button>
+                  </div>
+                ))
+              )}
+
+            </div>
           </div>
         </aside>
 
@@ -680,17 +1171,102 @@ useEffect(() => {
                   >
 
                     <div
-                        className={
-                          item.role === "user"
-                              ? "max-w-xl rounded-2xl bg-gray-900 px-4 py-3 text-sm text-white"
-                              : "max-w-xl text-sm leading-6 text-gray-700"
-                        }
+                      className={
+                        item.role === "user"
+                          ? "max-w-xl rounded-2xl bg-gray-900 px-4 py-3 text-sm text-white"
+                          : "min-w-0 max-w-xl text-sm leading-6 text-gray-700"
+                      }
                     >
-                      {item.content}
+                      {item.role === "user" ? (
+                        item.content
+                      ) : (
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({children}) => (
+                              <p className="my-2 break-words">
+                                {children}
+                              </p>
+                            ),
+
+                            ul: ({children}) => (
+                              <ul className="my-2 list-disc space-y-1 pl-5">
+                                {children}
+                              </ul>
+                            ),
+
+                            ol: ({children}) => (
+                              <ol className="my-2 list-decimal space-y-1 pl-5">
+                                {children}
+                              </ol>
+                            ),
+
+                            li: ({children}) => (
+                              <li className="break-words">
+                                {children}
+                              </li>
+                            ),
+
+                            h1: ({children}) => (
+                              <h1 className="my-3 text-lg font-semibold">
+                                {children}
+                              </h1>
+                            ),
+
+                            h2: ({children}) => (
+                              <h2 className="my-3 text-base font-semibold">
+                                {children}
+                              </h2>
+                            ),
+
+                            h3: ({children}) => (
+                              <h3 className="my-2 font-semibold">
+                                {children}
+                              </h3>
+                            ),
+
+                            table: ({ children }) => (
+                              <div className="my-3 w-full overflow-x-auto">
+                                <table className="w-full table-auto border-collapse text-xs">
+                                  {children}
+                                </table>
+                              </div>
+                            ),
+
+                            th: ({ children }) => (
+                              <th className="border px-2 py-2 text-left align-top font-semibold">
+                                {children}
+                              </th>
+                            ),
+
+                            td: ({ children }) => (
+                              <td className="border px-2 py-2 text-left align-top">
+                                {children}
+                              </td>
+                            ),
+
+                            pre: ({children}) => (
+                              <pre className="my-3 max-w-full overflow-x-auto rounded-lg bg-gray-100 p-3 text-sm">
+                                {children}
+                              </pre>
+                            ),
+
+                            code: ({children}) => (
+                              <code className="break-words">
+                                {children}
+                              </code>
+                            ),
+                          }}
+                        >
+                          {item.content || ""}
+                        </ReactMarkdown>
+                      )}
                     </div>
 
                   </div>
               ))}
+
+              <div ref={messagesEndRef} />
 
               {/* Thinking */}
               {sending && (
@@ -857,6 +1433,180 @@ useEffect(() => {
 
               </div>
             </div>
+        )}
+
+        {isMcpModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl">
+
+              {mcpModalView === "search" && (
+                <>
+                  <div className="mb-5 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-semibold">
+                        MCP Servers
+                      </h2>
+
+                      <p className="mt-1 text-sm text-gray-500">
+                        Search MCP servers and add
+                        tools to your agent.
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() =>
+                        setIsMcpModalOpen(false)
+                      }
+                      className="rounded-lg px-3 py-2 text-sm text-gray-500 hover:bg-gray-100"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <input
+                    value={mcpSearch}
+                    onChange={(event) =>
+                      setMcpSearch(
+                        event.target.value,
+                      )
+                    }
+                    placeholder="Search MCP servers..."
+                    className="mb-4 w-full rounded-xl border px-4 py-3 outline-none focus:ring-2"
+                  />
+
+                  <div className="max-h-[420px] space-y-3 overflow-y-auto">
+                    {filteredMcpServers.map(
+                      (server) => (
+                        <div
+                          key={server.id}
+                          className="rounded-xl border p-4"
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div>
+                              <h3 className="font-medium">
+                                {server.name}
+                              </h3>
+
+                              {server.description && (
+                                <p className="mt-1 text-sm text-gray-500">
+                                  {
+                                    server.description
+                                  }
+                                </p>
+                              )}
+                            </div>
+
+                            <button
+                              disabled={
+                                isLoadingMcpTools
+                              }
+                              onClick={() =>
+                                handleViewMcpTools(
+                                  server,
+                                )
+                              }
+                              className="shrink-0 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50 disabled:opacity-50"
+                            >
+                              View Tools
+                            </button>
+                          </div>
+                        </div>
+                      ),
+                    )}
+                  </div>
+                </>
+              )}
+
+              {mcpModalView === "tools" &&
+                selectedMcpServer && (
+                  <>
+                    <div className="mb-5">
+                      <button
+                        onClick={
+                          handleBackToMcpSearch
+                        }
+                        className="mb-4 flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-black"
+                      >
+                        ← Back
+                      </button>
+
+                      <h2 className="text-xl font-semibold">
+                        {selectedMcpServer.name}
+                      </h2>
+
+                      {selectedMcpServer.description && (
+                        <p className="mt-1 text-sm text-gray-500">
+                          {
+                            selectedMcpServer.description
+                          }
+                        </p>
+                      )}
+                    </div>
+
+                    {mcpSuccessMessage && (
+                      <div className="mb-4 rounded-lg bg-gray-100 px-3 py-2 text-sm text-gray-700">
+                        {mcpSuccessMessage}
+                      </div>
+                    )}
+
+                    <div className="max-h-[420px] space-y-3 overflow-y-auto">
+                      {mcpTools.map((tool) => {
+
+                        const checked =
+                            selectedMcpToolIds.includes(tool.id);
+
+                        return (
+                          <label
+                            key={tool.id}
+                            className="flex cursor-pointer items-start gap-3 rounded-xl border p-4 hover:bg-gray-50"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                handleToggleMcpTool(tool.id)
+                              }
+                              className="mt-1"
+                            />
+
+                            <div>
+                              <div className="font-medium">
+                                {tool.name}
+                              </div>
+
+                              {tool.description && (
+                                <p className="mt-1 text-sm text-gray-500">
+                                  {tool.description}
+                                </p>
+                              )}
+                            </div>
+                          </label>
+                        );
+                      })}
+
+                    </div>
+
+                    <div className="mt-6 flex justify-end">
+                      <button
+                        onClick={
+                          handleApplyMcpTools
+                        }
+                        disabled={
+                          selectedMcpToolIds.length ===
+                            0 ||
+                          isAddingTools
+                        }
+                        className="rounded-xl bg-black px-5 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {isAddingTools
+                          ? "Applying..."
+                          : `Apply `}
+                      </button>
+                    </div>
+                  </>
+                )}
+            </div>
+          </div>
         )}
 
       </main>

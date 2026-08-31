@@ -1,16 +1,16 @@
-import json
-
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import get_current_user
 from app.db.dependencies import get_db
+
+from app.models.users import User
 from app.models.agent import Agent
 from app.models.agent_tool import AgentTool
+from app.models.mcp_connection import MCPConnection
 from app.models.mcp_server import MCPServer
 from app.models.mcp_tools import MCPTool
-
-
 
 from app.schemas.agent import (
     AgentCreate,
@@ -21,6 +21,7 @@ from app.schemas.agent import (
 )
 
 from app.services.mcp.client import MCPClient
+from app.services.mcp.connections.registry import get_connection_provider
 
 router = APIRouter(
     prefix="/api/agents",
@@ -31,9 +32,11 @@ router = APIRouter(
 @router.post("", response_model=AgentResponse)
 async def create_agent(
         data: AgentCreate,
+        current_user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
 ):
     agent = Agent(
+        user_id=current_user.id,
         name=data.name,
         description=data.description,
         system_prompt=data.system_prompt,
@@ -49,11 +52,15 @@ async def create_agent(
 
 
 
-@router.get("", response_model= list[AgentResponse])
-async def get_agents(db: AsyncSession = Depends(get_db)):
-
+@router.get("", response_model=list[AgentResponse])
+async def get_agents(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.scalars(
-        select(Agent).order_by(Agent.id.desc())
+        select(Agent)
+        .where(Agent.user_id == current_user.id)
+        .order_by(Agent.id.desc())
     )
 
     return result.all()
@@ -61,9 +68,17 @@ async def get_agents(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
-async def get_agent(agent_id: int, db: AsyncSession = Depends(get_db)):
-
-    agent = await db.get(Agent, agent_id)
+async def get_agent(
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    agent = await db.scalar(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not agent:
         raise HTTPException(
@@ -76,9 +91,17 @@ async def get_agent(agent_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/{agent_id}")
-async def delete_agent(agent_id: int, db: AsyncSession = Depends(get_db)):
-
-    agent = await db.get(Agent, agent_id)
+async def delete_agent(
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    agent = await db.scalar(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not agent:
         raise HTTPException(
@@ -97,11 +120,17 @@ async def delete_agent(agent_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{agent_id}/tools")
 async def select_agent_tools(
-        agent_id: int,
-        data: AgentToolSelect,
-        db: AsyncSession = Depends(get_db),
+    agent_id: int,
+    data: AgentToolSelect,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    agent = await db.get(Agent, agent_id)
+    agent = await db.scalar(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not agent:
         raise HTTPException(
@@ -109,25 +138,22 @@ async def select_agent_tools(
             detail="Agent not found",
         )
 
-    if not data.tool_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one tool must be selected",
+    tool_ids = list(set(data.tool_ids))
+
+    if tool_ids:
+        result = await db.scalars(
+            select(MCPTool).where(
+                MCPTool.id.in_(tool_ids)
+            )
         )
 
-    result = await db.scalars(
-        select(MCPTool).where(
-            MCPTool.id.in_(data.tool_ids)
-        )
-    )
+        tools = result.all()
 
-    tools = result.all()
-
-    if len(tools) != len(set(data.tool_ids)):
-        raise HTTPException(
-            status_code=404,
-            detail="One or more MCP tools not found",
-        )
+        if len(tools) != len(tool_ids):
+            raise HTTPException(
+                status_code=404,
+                detail="One or more MCP tools not found",
+            )
 
     existing_tools = await db.scalars(
         select(AgentTool).where(
@@ -138,29 +164,40 @@ async def select_agent_tools(
     for agent_tool in existing_tools.all():
         await db.delete(agent_tool)
 
-    for tool_id in set(data.tool_ids):
-        agent_tool = AgentTool(
-            agent_id=agent_id,
-            mcp_tool_id= tool_id,
-            enabled=True
+    for tool_id in tool_ids:
+        db.add(
+            AgentTool(
+                agent_id=agent_id,
+                mcp_tool_id=tool_id,
+                enabled=True,
+            )
         )
-
-        db.add(agent_tool)
 
     await db.commit()
 
     return {
         "message": "Agent tools updated successfully",
         "agent_id": agent_id,
-        "tool_ids": list(set(data.tool_ids)),
+        "tool_ids": tool_ids,
     }
 
 
 
-@router.get("/{agent_id}/tools", response_model= list[AgentToolResponse])
-async def get_agent_tools(agent_id: int, db: AsyncSession = Depends(get_db)):
-
-    agent = await db.get(Agent, agent_id)
+@router.get(
+    "/{agent_id}/tools",
+    response_model=list[AgentToolResponse],
+)
+async def get_agent_tools(
+    agent_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    agent = await db.scalar(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not agent:
         raise HTTPException(
@@ -169,12 +206,15 @@ async def get_agent_tools(agent_id: int, db: AsyncSession = Depends(get_db)):
         )
 
     result = await db.scalars(
-        select(MCPTool).join(
+        select(MCPTool)
+        .join(
             AgentTool,
-            AgentTool.mcp_tool_id== MCPTool.id,
-        ).where(
+            AgentTool.mcp_tool_id == MCPTool.id,
+        )
+        .where(
             AgentTool.agent_id == agent_id
-        ).order_by(MCPTool.id)
+        )
+        .order_by(MCPTool.id)
     )
 
     return result.all()
@@ -183,16 +223,18 @@ async def get_agent_tools(agent_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{agent_id}/tools/{tool_id}/call")
 async def call_agent_tool(
-        agent_id: int,
-        tool_id: int,
-        data: AgentToolCallRequest,
-        x_mcp_token: str | None = Header(
-            default=None,
-            alias="X-MCP-Token",
-        ),
-        db: AsyncSession = Depends(get_db),
+    agent_id: int,
+    tool_id: int,
+    data: AgentToolCallRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    agent = await db.get(Agent, agent_id)
+    agent = await db.scalar(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not agent:
         raise HTTPException(
@@ -201,15 +243,18 @@ async def call_agent_tool(
         )
 
     result = await db.execute(
-        select(MCPTool,MCPServer).join(
+        select(MCPTool, MCPServer)
+        .join(
             MCPServer,
-            MCPServer.id == MCPTool.mcp_server_id
-        ).join(
+            MCPServer.id == MCPTool.mcp_server_id,
+        )
+        .join(
             AgentTool,
             AgentTool.mcp_tool_id == MCPTool.id,
-        ).where(
+        )
+        .where(
             AgentTool.agent_id == agent_id,
-            AgentTool.mcp_tool_id == tool_id
+            AgentTool.mcp_tool_id == tool_id,
         )
     )
 
@@ -226,17 +271,47 @@ async def call_agent_tool(
     client = MCPClient()
 
     try:
-        print("X MCP TOKEN EXISTS:", bool(x_mcp_token))
+        access_token = None
 
-        result = await client.connect(
+        if server.connection_provider:
+            connection = await db.scalar(
+                select(MCPConnection).where(
+                    MCPConnection.user_id == current_user.id,
+                    MCPConnection.mcp_server_id == server.id,
+                )
+            )
+
+            if not connection:
+                raise HTTPException(
+                    status_code=401,
+                    detail="User is not connected to this MCP server",
+                )
+
+            provider = get_connection_provider(
+                server.connection_provider
+            )
+
+            if not provider:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Connection provider not found",
+                )
+
+            access_token = await provider.get_valid_access_token(
+                connection=connection,
+                server=server,
+                db=db,
+            )
+
+        tools_result = await client.connect(
             server.url,
-            access_token=x_mcp_token,
+            access_token=access_token,
         )
 
         available_tool = next(
             (
                 item
-                for item in result.tools
+                for item in tools_result.tools
                 if item.name == tool.name
             ),
             None,
@@ -260,7 +335,7 @@ async def call_agent_tool(
             "result": tool_result.model_dump(),
         }
 
-    except HTTPException :
+    except HTTPException:
         raise
 
     except Exception as exc:
@@ -270,17 +345,26 @@ async def call_agent_tool(
         )
 
     finally:
-        await client.close()
+        try:
+            await client.close()
+        except BaseException as exc:
+            print("MCP FINALIZE ERROR:", repr(exc))
 
 
 
 @router.delete("/{agent_id}/tools/{tool_id}")
 async def delete_agent_tool(
-        agent_id: int,
-        tool_id: int,
-        db: AsyncSession = Depends(get_db),
+    agent_id: int,
+    tool_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    agent = await db.get(Agent, agent_id)
+    agent = await db.scalar(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not agent:
         raise HTTPException(
@@ -288,14 +372,12 @@ async def delete_agent_tool(
             detail="Agent not found",
         )
 
-    result = await db.execute(
+    agent_tool = await db.scalar(
         select(AgentTool).where(
             AgentTool.agent_id == agent_id,
             AgentTool.mcp_tool_id == tool_id,
         )
     )
-
-    agent_tool = result.scalar_one_or_none()
 
     if not agent_tool:
         raise HTTPException(

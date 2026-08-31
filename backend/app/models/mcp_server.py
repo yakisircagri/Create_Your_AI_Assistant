@@ -1,4 +1,4 @@
-from sqlalchemy import String, Text
+from sqlalchemy import  String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -27,3 +27,9 @@ class MCPServer(Base):
         Text,
         nullable=True,
     )
+
+    connection_provider: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+

@@ -21,6 +21,11 @@ from app.schemas.conversation import (
 )
 from app.services.llm_services import LLMService
 from app.services.mcp.client import MCPClient
+from app.models.mcp_connection import MCPConnection
+from app.services.mcp.connections.registry import get_connection_provider
+from app.core.security import get_current_user
+from app.models.users import User
+from app.prompts.agent_prompts import build_agent_system_prompt
 
 load_dotenv()
 
@@ -33,17 +38,26 @@ router = APIRouter(
 
 @router.post("", response_model=ConversationResponse)
 async def create_conversation(
-        data: ConversationCreate,
-        db: AsyncSession = Depends(get_db),
+    data: ConversationCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    agent = await db.get(Agent,data.agent_id )
+    agent = await db.scalar(
+        select(Agent).where(
+            Agent.id == data.agent_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Agent not found",
+        )
 
     conversation = Conversation(
-        agent_id = data.agent_id,
-        title = data.title,
+        agent_id=agent.id,
+        title=data.title,
     )
 
     db.add(conversation)
@@ -57,13 +71,26 @@ async def create_conversation(
 
 @router.get("", response_model=list[ConversationResponse])
 async def get_conversations(
-        agent_id: int | None = None,
-        db: AsyncSession = Depends(get_db),
+    agent_id: int | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    query = select(Conversation).order_by(Conversation.id.desc())
+    query = (
+        select(Conversation)
+        .join(
+            Agent,
+            Agent.id == Conversation.agent_id,
+        )
+        .where(
+            Agent.user_id == current_user.id
+        )
+        .order_by(Conversation.id.desc())
+    )
 
     if agent_id is not None:
-        query = query.where(Conversation.agent_id == agent_id)
+        query = query.where(
+            Conversation.agent_id == agent_id
+        )
 
     result = await db.scalars(query)
 
@@ -71,15 +98,32 @@ async def get_conversations(
 
 
 
-@router.get("/{conversation_id}", response_model=ConversationResponse)
+@router.get(
+    "/{conversation_id}",
+    response_model=ConversationResponse,
+)
 async def get_conversation(
-        conversation_id: int,
-        db: AsyncSession = Depends(get_db),
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    conversation = await db.get(Conversation, conversation_id)
+    conversation = await db.scalar(
+        select(Conversation)
+        .join(
+            Agent,
+            Agent.id == Conversation.agent_id,
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found",
+        )
 
     return conversation
 
@@ -87,13 +131,27 @@ async def get_conversation(
 
 @router.delete("/{conversation_id}")
 async def delete_conversation(
-        conversation_id: int,
-        db: AsyncSession = Depends(get_db),
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    conversation = await db.get(Conversation, conversation_id)
+    conversation = await db.scalar(
+        select(Conversation)
+        .join(
+            Agent,
+            Agent.id == Conversation.agent_id,
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found",
+        )
 
     await db.delete(conversation)
     await db.commit()
@@ -108,13 +166,20 @@ async def delete_conversation(
 async def create_message(
         conversation_id: int,
         data: MessageCreate,
-        x_mcp_token: str | None = Header(
-            default=None,
-            alias="X-MCP-Token",
-        ),
+        current_user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
 ):
-    conversation = await db.get(Conversation, conversation_id)
+    conversation = await db.scalar(
+        select(Conversation)
+        .join(
+            Agent,
+            Agent.id == Conversation.agent_id,
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Agent.user_id == current_user.id,
+        )
+    )
 
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -149,10 +214,15 @@ async def create_message(
 
     previous_messages = result.all()
 
+    system_prompt = build_agent_system_prompt(
+        agent.system_prompt
+    )
+    
+
     messages = [
         {
-            "role" : "system",
-            "content" : agent.system_prompt or ""
+            "role": "system",
+            "content": system_prompt,
         }
     ]
 
@@ -201,218 +271,285 @@ async def create_message(
         "content" : data.content or "",
     })
 
-    max_iterations = 5
+    mcp_clients: dict[int, MCPClient] = {}
 
-    for _ in range(max_iterations):
+    try:
 
-        print("======== FINAL MESSAGES TO OPENAI ========")
-        for i, msg in enumerate(messages):
-            print(f"[{i}] {msg}")
-        print("==========================================")
+        max_iterations = 10
 
-        response = await llm.client.chat.completions.create(
-            model=agent.model,
-            messages=messages,
-            tools=openai_tools or [],
-        )
+        for _ in range(max_iterations):
 
-        message = response.choices[0].message
+            response = await llm.client.chat.completions.create(
+                model=agent.model,
+                messages=messages,
+                tools=openai_tools or [],
+            )
 
-        print("======== LLM RESPONSE ========")
-        print("CONTENT:", message.content)
-        print("TOOL CALLS:", message.tool_calls)
-        print("==============================")
+            message = response.choices[0].message
 
-        if not message.tool_calls:
+            print("======== LLM RESPONSE ========")
+            print("CONTENT:", message.content)
+            print("TOOL CALLS:", message.tool_calls)
+            print("==============================")
+
+            if not message.tool_calls:
+
+                assistant_message = ConversationMessage(
+                    conversation_id = conversation_id,
+                    role = "assistant",
+                    content = message.content or "",
+                )
+
+                db.add(assistant_message)
+
+                await db.commit()
+                await db.refresh(assistant_message)
+
+                if (
+                        not conversation.title
+                        or conversation.title == "New Conversation"
+                        or conversation.title == "string"
+                ):
+                    try:
+                        title_messages = [
+                            *messages,
+                            {
+                                "role": "assistant",
+                                "content": assistant_message.content,
+                            },
+                        ]
+
+                        title = await llm.generate_conversation_title(title_messages)
+
+                        conversation.title = title
+
+                        await db.commit()
+                        await db.refresh(conversation)
+
+
+                    except Exception as exc:
+                        print(
+                            "CONVERSATION TITLE ERROR:",
+                            repr(exc),
+                        )
+
+                return {
+                    "message": assistant_message.content,
+                    "conversation title": conversation.title,
+                }
+
+            assistant_tool_calls = [
+                tool_call.model_dump(
+                    exclude_none=True,
+                )
+                for tool_call in message.tool_calls
+            ]
 
             assistant_message = ConversationMessage(
-                conversation_id = conversation_id,
-                role = "assistant",
-                content = message.content or "",
+                conversation_id=conversation_id,
+                role="assistant",
+                content=message.content,
+                tool_calls=json.dumps(assistant_tool_calls),
             )
 
             db.add(assistant_message)
 
             await db.commit()
 
-            print("======== SAVED ASSISTANT TOOL CALLS ========")
-            print(assistant_message.tool_calls)
-            print("============================================")
-
-            return {
-                "message": assistant_message.content,
-            }
-
-        assistant_tool_calls = [
-            tool_call.model_dump(
-                exclude_none=True,
-            )
-            for tool_call in message.tool_calls
-        ]
-
-        assistant_message = ConversationMessage(
-            conversation_id=conversation_id,
-            role="assistant",
-            content=message.content,
-            tool_calls=json.dumps(assistant_tool_calls),
-        )
-
-        db.add(assistant_message)
-
-        await db.commit()
-
-        messages.append(
-            {
-                "role" : "assistant",
-                "content" : message.content ,
-                "tool_calls" : assistant_tool_calls,
-            }
-        )
-
-        for tool_call in message.tool_calls:
-
-            tool_name = tool_call.function.name
-
-            arguments = json.loads(tool_call.function.arguments)
-
-            selected_tool = next(
-                (
-                    tool
-                    for tool in selected_tools
-                    if tool.name == tool_name
-                ),
-                None,
+            messages.append(
+                {
+                    "role" : "assistant",
+                    "content" : message.content ,
+                    "tool_calls" : assistant_tool_calls,
+                }
             )
 
-            if not selected_tool:
+            for tool_call in message.tool_calls:
 
-                messages.append(
-                    {
-                        "role" : "tool",
-                        "tool_call_id" : tool_call.id,
-                        "content": (
-                            f"Tool '{tool_name}' "
-                            "is not selected for this agent"
+                tool_name = tool_call.function.name
+                arguments = json.loads(tool_call.function.arguments)
+
+                try:
+                    selected_tool = next(
+                        (
+                            tool
+                            for tool in selected_tools
+                            if tool.name == tool_name
                         ),
-                    }
-                )
-                continue
+                        None,
+                    )
 
-            server = await db.get(MCPServer, selected_tool.mcp_server_id)
+                    if not selected_tool:
+                        raise ValueError(
+                            f"Tool '{tool_name}' is not selected for this agent"
+                        )
 
-            if not server:
+                    server = await db.get(
+                        MCPServer,
+                        selected_tool.mcp_server_id,
+                    )
 
-                messages.append(
-                    {
-                        "role" : "tool",
-                        "tool_call_id" : tool_call.id,
-                        "content": (
+                    if not server:
+                        raise ValueError(
                             "MCP server not found"
-                        ),
-                    }
-                )
-                continue
+                        )
 
-            client = MCPClient()
-            test_token = os.getenv("THY_TEST_ACCESS_TOKEN")
+                    connection = await db.scalar(
+                        select(MCPConnection).where(
+                            MCPConnection.user_id == current_user.id,
+                            MCPConnection.mcp_server_id == server.id,
+                        )
+                    )
 
-            try:
-                await client.connect(
-                    server.url,
-                    access_token=x_mcp_token or test_token,
-                )
+                    if not connection:
+                        raise ValueError(
+                            "User is not connected to this MCP server"
+                        )
 
-                tool_result = await client.call_tool(tool_name, arguments)
+                    provider = get_connection_provider(
+                        server.connection_provider
+                    )
 
-                tool_text = ""
+                    if not provider:
+                        raise ValueError(
+                            f"Connection provider not found: "
+                            f"{server.connection_provider}"
+                        )
 
-                if tool_result.content:
-                    for content in tool_result.content:
-                        if hasattr(content, "text"):
-                            tool_text += content.text
+                    client = mcp_clients.get(server.id)
 
-                if not tool_text:
-                    tool_text = str(tool_result)
+                    if client is None:
+                        access_token = await provider.get_valid_access_token(
+                            connection=connection,
+                            server=server,
+                            db=db,
+                        )
 
-                tool_message = ConversationMessage(
-                    conversation_id = conversation_id,
-                    role = "tool",
-                    content = tool_text,
-                    tool_name = tool_name,
-                    tool_call_id = tool_call.id,
-                    tool_arguments = json.dumps(arguments),
-                )
+                        client = MCPClient()
 
-                db.add(tool_message)
+                        await client.connect(
+                            server.url,
+                            access_token=access_token,
+                        )
 
-                await db.commit()
+                        mcp_clients[server.id] = client
 
-                messages.append(
-                    {
-                        "role" : "tool",
-                        "tool_call_id" : tool_call.id,
-                        "content": tool_text
-                    }
-                )
+                    tool_result = await client.call_tool(
+                        tool_name,
+                        arguments,
+                    )
 
+                    tool_text = ""
 
-            except Exception as exc:
+                    if tool_result.content:
+                        for content in tool_result.content:
+                            if hasattr(content, "text"):
+                                tool_text += content.text
 
-                error_text = (
-                    f"Failed to execute MCP tool: {str(exc)}"
-                )
+                    if not tool_text:
+                        tool_text = str(tool_result)
 
-                error_tool_message = ConversationMessage(
-                    conversation_id=conversation_id,
-                    role="tool",
-                    content=error_text,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call.id,
-                    tool_arguments=json.dumps(arguments),
-                )
+                    tool_message = ConversationMessage(
+                        conversation_id=conversation_id,
+                        role="tool",
+                        content=tool_text,
+                        tool_name=tool_name,
+                        tool_call_id=tool_call.id,
+                        tool_arguments=json.dumps(arguments),
+                    )
 
-                db.add(error_tool_message)
-                await db.commit()
+                    db.add(tool_message)
+                    await db.commit()
 
-                messages.append(
-                    {
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_text,
+                    })
+
+                except Exception as exc:
+
+                    error_text = (
+                        f"Failed to execute MCP tool: {str(exc)}"
+                    )
+
+                    error_tool_message = ConversationMessage(
+                        conversation_id=conversation_id,
+                        role="tool",
+                        content=error_text,
+                        tool_name=tool_name,
+                        tool_call_id=tool_call.id,
+                        tool_arguments=json.dumps(arguments),
+                    )
+
+                    db.add(error_tool_message)
+                    await db.commit()
+
+                    messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "content": error_text,
-                    }
+                    })
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Agent reached maximum "
+                "tool-calling iterations"
+            ),
+        )
+
+    finally:
+
+        for client in mcp_clients.values():
+
+            try:
+                await client.close()
+
+            except BaseException as exc:
+                print(
+                    "MCP FINALIZE ERROR:",
+                    repr(exc),
                 )
 
 
-            finally:
-                try:
-                    await client.close()
-                except BaseException as exc:
-                    print("MCP FINALIZE ERROR:", repr(exc))
 
-    raise HTTPException(
-        status_code=500,
-        detail=(
-            "Agent reached maximum "
-            "tool-calling iterations"
-        ),
+@router.get(
+    "/{conversation_id}/messages",
+    response_model=list[MessageResponse],
+)
+async def get_messages(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    conversation = await db.scalar(
+        select(Conversation)
+        .join(
+            Agent,
+            Agent.id == Conversation.agent_id,
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Agent.user_id == current_user.id,
+        )
     )
 
-
-
-@router.get("/{conversation_id}/messages", response_model=list[MessageResponse])
-async def get_messages(
-        conversation_id: int,
-        db: AsyncSession = Depends(get_db),
-):
-    conversation = await db.get(Conversation, conversation_id)
-
     if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found",
+        )
 
     result = await db.scalars(
         select(ConversationMessage)
-        .where(ConversationMessage.conversation_id == conversation.id)
-        .order_by(ConversationMessage.id.asc())
+        .where(
+            ConversationMessage.conversation_id
+            == conversation.id
+        )
+        .order_by(
+            ConversationMessage.id.asc()
+        )
     )
 
     return result.all()

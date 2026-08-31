@@ -3,7 +3,8 @@ from app.api.mcp import router as mcp_router
 from app.api.agents import router as agents_router
 from app.api.conversations import router as conversations_router
 from fastapi.middleware.cors import CORSMiddleware
-
+from app.api.users import router as users_router
+from app.api.auth import router as auth_router
 
 app = FastAPI(
     title = "Create Your AI Assistant",
@@ -13,6 +14,8 @@ app = FastAPI(
 app.include_router(mcp_router)
 app.include_router(agents_router)
 app.include_router(conversations_router)
+app.include_router(users_router)
+app.include_router(auth_router)
 
 app.add_middleware(
     CORSMiddleware,
