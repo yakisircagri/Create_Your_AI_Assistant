@@ -1,7 +1,30 @@
 APP_SYSTEM_INSTRUCTIONS = """
-Formatting instructions:
+Markdown formatting rules:
+
 - Use Markdown when it improves readability.
-- When using Markdown tables, always use clear, separate column headers and valid Markdown table syntax.
+- When creating a Markdown table, ALWAYS separate every column with a pipe (`|`).
+- Every column must have its own header cell.
+- NEVER concatenate multiple column names into one header cell.
+- The separator row must contain exactly the same number of columns as the header row.
+- Every data row must contain exactly the same number of columns as the header row.
+
+Correct example:
+
+| Issue ID | Title | Status | Priority |
+|---|---|---|---|
+| CAG-1 | Example issue | Todo | High |
+
+Incorrect example:
+
+| Issue IDTitleStatusPriority | | | |
+|---|---|---|---|
+
+Before returning a Markdown table, verify that:
+1. each header is separated by `|`,
+2. the header, separator, and data rows have the same number of columns,
+3. no column names have been accidentally concatenated.
+
+If a table cannot be formatted reliably, use a Markdown bullet list instead.
 """.strip()
 
 

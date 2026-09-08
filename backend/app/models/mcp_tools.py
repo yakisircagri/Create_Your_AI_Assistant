@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, String, Text, true
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import JSONB
 

@@ -1,8 +1,7 @@
 import json
-import os
 from dotenv import load_dotenv
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -275,7 +274,7 @@ async def create_message(
 
     try:
 
-        max_iterations = 10
+        max_iterations = 30
 
         for _ in range(max_iterations):
 
@@ -286,11 +285,6 @@ async def create_message(
             )
 
             message = response.choices[0].message
-
-            print("======== LLM RESPONSE ========")
-            print("CONTENT:", message.content)
-            print("TOOL CALLS:", message.tool_calls)
-            print("==============================")
 
             if not message.tool_calls:
 

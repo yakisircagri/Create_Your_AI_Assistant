@@ -47,6 +47,7 @@ async def register_mcp_server(
         name=data.name,
         url=data.url,
         description=data.description,
+        connection_provider=data.connection_provider,
     )
 
     db.add(server)
