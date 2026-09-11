@@ -201,9 +201,35 @@ async def create_message(
 
     selected_tools = result.scalars().all()
 
+    server_ids = {
+        tool.mcp_server_id
+        for tool in selected_tools
+    }
+
+    server_names: dict[int, str] = {}
+
+    if server_ids:
+        server_result = await db.scalars(
+            select(MCPServer).where(
+                MCPServer.id.in_(server_ids)
+            )
+        )
+
+        servers = server_result.all()
+
+        server_names = {
+            server.id: server.name
+            for server in servers
+        }
+
     llm = LLMService()
 
-    openai_tools = llm.mcp_tools_to_openai_tools(selected_tools)
+    openai_tools = (
+        llm.mcp_tools_to_openai_tools(
+            selected_tools,
+            server_names,
+        )
+    )
 
     result = await db.scalars(
         select(ConversationMessage)
@@ -368,7 +394,12 @@ async def create_message(
                         (
                             tool
                             for tool in selected_tools
-                            if tool.name == tool_name
+                            if llm.get_openai_tool_name(
+                            tool,
+                            server_names[
+                                tool.mcp_server_id
+                            ],
+                        ) == tool_name
                         ),
                         None,
                     )
@@ -429,7 +460,7 @@ async def create_message(
                         mcp_clients[server.id] = client
 
                     tool_result = await client.call_tool(
-                        tool_name,
+                        selected_tool.name,
                         arguments,
                     )
 
@@ -495,12 +526,13 @@ async def create_message(
 
     finally:
 
-        for client in mcp_clients.values():
-
+        for client in reversed(
+                list(mcp_clients.values())
+        ):
             try:
                 await client.close()
 
-            except BaseException as exc:
+            except Exception as exc:
                 print(
                     "MCP FINALIZE ERROR:",
                     repr(exc),

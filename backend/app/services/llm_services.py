@@ -1,4 +1,5 @@
 import json
+import re
 
 from openai import AsyncOpenAI
 
@@ -150,31 +151,85 @@ class LLMService:
 
         return title.strip()
 
-
-
     @staticmethod
-    def mcp_tools_to_openai_tools(mcp_tools):
+    def normalize_server_name(
+            server_name: str,
+    ) -> str:
+
+        normalized = server_name.lower()
+
+        normalized = re.sub(
+            r"[^a-z0-9]+",
+            "_",
+            normalized,
+        )
+
+        return normalized.strip("_")
+
+    @classmethod
+    def get_openai_tool_name(
+            cls,
+            tool,
+            server_name: str,
+    ) -> str:
+
+        server_namespace = cls.normalize_server_name(
+            server_name
+        )
+
+        return f"{server_namespace}__{tool.name}"
+
+    @classmethod
+    def mcp_tools_to_openai_tools(
+            cls,
+            mcp_tools,
+            server_names: dict[int, str],
+    ):
         tools = []
 
         for tool in mcp_tools:
-            schema = dict(tool.input_schema or {})
 
-            properties = schema.get("properties", {})
-
-            if properties and "required" not in schema:
-                schema["required"] = list(properties.keys())
-
-            tools.append(
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description or "",
-                        "parameters": schema,
-                    },
-                }
+            schema = dict(
+                tool.input_schema or {}
             )
 
+            if "type" not in schema:
+                schema["type"] = "object"
+
+            if "properties" not in schema:
+                schema["properties"] = {}
+
+            server_name = server_names.get(
+                tool.mcp_server_id
+            )
+
+            if not server_name:
+                raise ValueError(
+                    f"MCP server name not found "
+                    f"for server id "
+                    f"{tool.mcp_server_id}"
+                )
+
+            openai_tool_name = (
+                cls.get_openai_tool_name(
+                    tool,
+                    server_name,
+                )
+            )
+
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": openai_tool_name,
+                    "description": (
+                        f"[MCP Server: {server_name}] "
+                        f"{tool.description or ''}"
+                    ),
+                    "parameters": schema,
+                },
+            })
+
         return tools
+
 
 

@@ -1,3 +1,5 @@
+import asyncio
+
 from contextlib import AsyncExitStack
 
 import httpx2
@@ -55,19 +57,25 @@ class MCPClient:
             mcp_session.LATEST_HANDSHAKE_VERSION = original_handshake_version
 
     async def call_tool(
-        self,
-        tool_name: str,
-        arguments: dict,
+            self,
+            tool_name: str,
+            arguments: dict,
+            timeout: float = 90.0,
     ):
         if self.client is None:
             raise RuntimeError(
                 "MCP client is not connected"
             )
 
-        return await self.client.session.call_tool(
-            tool_name,
-            arguments,
+        tool_result = await asyncio.wait_for(
+            self.client.session.call_tool(
+                tool_name,
+                arguments,
+            ),
+            timeout=timeout,
         )
+
+        return tool_result
 
     async def close(self):
         try:
