@@ -278,7 +278,9 @@ export default function Home() {
         selectedConversation.id,
         authToken,
       );
+
         setMessages(data);
+
       } catch (error) {
         console.error(error);
         setMessages([]);
@@ -414,6 +416,11 @@ useEffect(() => {
     const content = message.trim();
 
     setMessage("");
+
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
+
     setSending(true);
 
     const temporaryUserMessage: Message = {
@@ -1127,186 +1134,208 @@ useEffect(() => {
           </header>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto px-6 py-8">
 
-            <div className="mx-auto flex max-w-3xl flex-col gap-6">
+            <div className="flex-1 overflow-y-auto px-6 py-8">
 
-              {/* No conversation */}
-              {!selectedConversation && (
-                  <div className="flex flex-1 items-center justify-center py-32">
+              <div className="w-full min-w-0">
 
+                {/* No conversation */}
+                {!selectedConversation && (
+                  <div className="flex items-center justify-center py-32">
                     <div className="text-center">
 
                       <h3 className="text-xl font-semibold">
                         {selectedAgent
-                            ? "Add new conversation"
-                            : "Choose an agent"}
+                          ? "Add new conversation"
+                          : "Choose an agent"}
                       </h3>
 
                       <p className="mt-2 text-sm text-gray-500">
                         {selectedAgent
-                            ? "You can start to chat by pressing the New Conversation button."
-                            : "You must choose at least one agent to chat."}
+                          ? "You can start to chat by pressing the New Conversation button."
+                          : "You must choose at least one agent to chat."}
                       </p>
 
                     </div>
-
                   </div>
-              )}
+                )}
 
-              {/* Messages */}
-              {messages
-                .filter(
-                  (item) =>
-                    item.role === "user" ||
-                    item.role === "assistant",
-                ).map((item) => (
-                  <div
-                      key={item.id}
-                      className={
-                        item.role === "user"
+                {/* ONLY REAL MESSAGES */}
+                <div className="space-y-6">
+
+                  {messages
+                    .filter(
+                      (item) =>
+                        (item.role === "user" ||
+                          item.role === "assistant") &&
+                        typeof item.content === "string" &&
+                        item.content.trim().length > 0
+                    )
+                    .map((item) => (
+
+                      <div
+                        key={item.id}
+                        className={
+                          item.role === "user"
                             ? "flex justify-end"
                             : "flex justify-start"
-                      }
-                  >
+                        }
+                      >
 
-                    <div
-                      className={
-                        item.role === "user"
-                          ? "max-w-xl rounded-2xl bg-gray-900 px-4 py-3 text-sm text-white"
-                          : "min-w-0 max-w-xl text-sm leading-6 text-gray-700"
-                      }
-                    >
-                      {item.role === "user" ? (
-                        item.content
-                      ) : (
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            p: ({children}) => (
-                              <p className="my-2 break-words">
-                                {children}
-                              </p>
-                            ),
-
-                            ul: ({children}) => (
-                              <ul className="my-2 list-disc space-y-1 pl-5">
-                                {children}
-                              </ul>
-                            ),
-
-                            ol: ({children}) => (
-                              <ol className="my-2 list-decimal space-y-1 pl-5">
-                                {children}
-                              </ol>
-                            ),
-
-                            li: ({children}) => (
-                              <li className="break-words">
-                                {children}
-                              </li>
-                            ),
-
-                            h1: ({children}) => (
-                              <h1 className="my-3 text-lg font-semibold">
-                                {children}
-                              </h1>
-                            ),
-
-                            h2: ({children}) => (
-                              <h2 className="my-3 text-base font-semibold">
-                                {children}
-                              </h2>
-                            ),
-
-                            h3: ({children}) => (
-                              <h3 className="my-2 font-semibold">
-                                {children}
-                              </h3>
-                            ),
-
-                            table: ({ children }) => (
-                              <div className="my-3 w-full overflow-x-auto">
-                                <table className="w-full table-auto border-collapse text-xs">
-                                  {children}
-                                </table>
-                              </div>
-                            ),
-
-                            th: ({ children }) => (
-                              <th className="border px-2 py-2 text-left align-top font-semibold">
-                                {children}
-                              </th>
-                            ),
-
-                            td: ({ children }) => (
-                              <td className="border px-2 py-2 text-left align-top">
-                                {children}
-                              </td>
-                            ),
-
-                            pre: ({children}) => (
-                              <pre className="my-3 max-w-full overflow-x-auto rounded-lg bg-gray-100 p-3 text-sm">
-                                {children}
-                              </pre>
-                            ),
-
-                            code: ({children}) => (
-                              <code className="break-words">
-                                {children}
-                              </code>
-                            ),
-                          }}
+                        <div
+                          className={
+                            item.role === "user"
+                              ? "w-full rounded-2xl bg-gray-900 px-4 py-3 text-sm text-white"
+                              : "min-w-0 w-full text-sm leading-6 text-gray-700 [&>*]:!m-0 [&>*+*]:!mt-3"
+                          }
                         >
-                          {item.content || ""}
-                        </ReactMarkdown>
-                      )}
-                    </div>
 
-                  </div>
-              ))}
+                          {item.role === "user" ? (
 
-              <div ref={messagesEndRef} />
+                            <div className="whitespace-pre-wrap break-words">
+                              {(item.content || "").trim()}
+                            </div>
 
-              {/* Thinking */}
-              {sending && (
-                  <div className="flex justify-start">
+                          ) : (
+
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={{
+                                p: ({ children }) => (
+                                  <p className="!m-0 break-words">
+                                    {children}
+                                  </p>
+                                ),
+
+                                ul: ({ children }) => (
+                                  <ul className="!m-0 list-disc space-y-1 pl-5">
+                                    {children}
+                                  </ul>
+                                ),
+
+                                ol: ({ children }) => (
+                                  <ol className="!m-0 list-decimal space-y-1 pl-5">
+                                    {children}
+                                  </ol>
+                                ),
+
+                                li: ({ children }) => (
+                                  <li className="!m-0 break-words">
+                                    {children}
+                                  </li>
+                                ),
+
+                                h1: ({ children }) => (
+                                  <h1 className="!m-0 text-lg font-semibold">
+                                    {children}
+                                  </h1>
+                                ),
+
+                                h2: ({ children }) => (
+                                  <h2 className="!m-0 text-base font-semibold">
+                                    {children}
+                                  </h2>
+                                ),
+
+                                h3: ({ children }) => (
+                                  <h3 className="!m-0 font-semibold">
+                                    {children}
+                                  </h3>
+                                ),
+
+                                table: ({ children }) => (
+                                  <div className="!m-0 w-full overflow-hidden">
+                                    <div className="w-full overflow-x-auto">
+                                      <table className="!m-0 w-full table-auto border-collapse text-xs">
+                                        {children}
+                                      </table>
+                                    </div>
+                                  </div>
+                                ),
+
+                                th: ({ children }) => (
+                                  <th className="border border-black px-3 py-2 text-left align-top font-semibold">
+                                    {children}
+                                  </th>
+                                ),
+
+                                td: ({ children }) => (
+                                  <td className="border border-black px-3 py-2 text-left align-top">
+                                    {children}
+                                  </td>
+                                ),
+
+                                pre: ({ children }) => (
+                                  <pre className="!m-0 max-w-full overflow-x-auto rounded-lg bg-gray-100 p-3 text-sm">
+                                    {children}
+                                  </pre>
+                                ),
+
+                                code: ({ children }) => (
+                                  <code className="break-words">
+                                    {children}
+                                  </code>
+                                ),
+                              }}
+                            >
+                              {(item.content || "").trim()}
+                            </ReactMarkdown>
+
+                          )}
+
+                        </div>
+
+                      </div>
+
+                    ))}
+
+                </div>
+
+                {/* Thinking - OUTSIDE message spacing */}
+                {sending && (
+                  <div className="mt-4 flex justify-start">
 
                     <div className="flex items-center gap-2 text-sm text-gray-500">
 
                       <span>Thinking</span>
 
                       <span className="flex gap-1">
-
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]"/>
-
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]"/>
-
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400"/>
-
-                </span>
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
+                        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-gray-400" />
+                      </span>
 
                     </div>
 
                   </div>
-              )}
+                )}
+
+                {/* Scroll target - OUTSIDE message spacing */}
+                <div ref={messagesEndRef} className="h-0" />
+
+              </div>
 
             </div>
-          </div>
 
           {/* Message Input */}
           <div className="border-t border-gray-200 px-6 py-4">
 
             <div
-                className="mx-auto flex max-w-3xl items-end rounded-2xl border border-gray-300 bg-white px-4 py-3 shadow-sm">
+                className="flex w-full min-w-0 items-end rounded-2xl border border-gray-300 bg-white px-4 py-3 shadow-sm"
+            >
 
           <textarea
               value={message}
               ref={textareaRef}
-              onChange={(event) =>
-                  setMessage(event.target.value)
-              }
-              onKeyDown={(event) => {
+
+              onChange={(event) => {
+                setMessage(event.target.value);
+
+                event.currentTarget.style.height = "auto";
+                event.currentTarget.style.height =
+                  `${Math.min(event.currentTarget.scrollHeight, 128)}px`;
+              }}
+                            onKeyDown={(event) => {
                 if (
                     event.key === "Enter" &&
                     !event.shiftKey
@@ -1324,7 +1353,7 @@ useEffect(() => {
                   !selectedConversation || sending
               }
               rows={1}
-              className="max-h-32 flex-1 resize-none bg-transparent text-sm outline-none placeholder:text-gray-400 disabled:cursor-not-allowed"
+             className="max-h-32 flex-1 resize-none overflow-y-auto bg-transparent text-sm outline-none placeholder:text-gray-400 disabled:cursor-not-allowed"
           />
 
               <button
